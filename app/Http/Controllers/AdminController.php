@@ -6,6 +6,7 @@ use App\Models\AccessCode;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
 
@@ -19,11 +20,11 @@ class AdminController extends Controller
     public function login(Request $request): RedirectResponse
     {
         $credentials = $request->validate([
-            'email' => ['required', 'email'],
+            'email'    => ['required', 'email'],
             'password' => ['required', 'string'],
         ]);
 
-        if (! Auth::attempt($credentials)) {
+        if (! Auth::attempt($credentials, remember: false)) {
             return back()
                 ->withInput($request->only('email'))
                 ->withErrors(['email' => 'Email atau password admin tidak sesuai.']);
@@ -38,6 +39,11 @@ class AdminController extends Controller
     {
         return view('pages.admin.dashboard', [
             'accessCodes' => AccessCode::query()
+                ->latest()
+                ->get(),
+            'sessions' => \App\Models\TestSession::query()
+                ->with('candidate')
+                ->withCount('answers')
                 ->latest()
                 ->get(),
         ]);
@@ -57,6 +63,21 @@ class AdminController extends Controller
         return redirect()
             ->route('admin.dashboard')
             ->with('success', "Kode akses baru berhasil dibuat: {$code}");
+    }
+
+    public function updatePassword(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+        ]);
+
+        $request->user()->update([
+            'password' => Hash::make($validated['password']),
+        ]);
+
+        return redirect()
+            ->route('admin.dashboard')
+            ->with('success', 'Password admin berhasil diperbarui.');
     }
 
     public function logout(Request $request): RedirectResponse

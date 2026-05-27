@@ -110,6 +110,7 @@ class InterviewBackendTest extends TestCase
     {
         $admin = User::create([
             'name' => 'Admin Ricksite',
+            'username' => 'admin',
             'email' => 'admin@ricksite.com',
             'password' => Hash::make('password'),
         ]);
@@ -129,13 +130,14 @@ class InterviewBackendTest extends TestCase
     {
         User::create([
             'name' => 'Admin Ricksite',
+            'username' => 'admin',
             'email' => 'admin@ricksite.com',
             'password' => Hash::make('password'),
         ]);
         AccessCode::create(['code' => 'VIEW01']);
 
         $this->post(route('admin.login'), [
-            'email' => 'admin@ricksite.com',
+            'username' => 'admin',
             'password' => 'password',
         ])->assertRedirect(route('admin.dashboard'));
 
@@ -143,5 +145,30 @@ class InterviewBackendTest extends TestCase
             ->assertOk()
             ->assertSee('VIEW01')
             ->assertSee('Generate New Access Code');
+    }
+
+    public function test_admin_can_update_password(): void
+    {
+        $admin = User::create([
+            'name' => 'Admin Ricksite',
+            'username' => 'admin',
+            'email' => 'admin@ricksite.com',
+            'password' => Hash::make('password'),
+        ]);
+
+        $this->actingAs($admin)
+            ->post(route('admin.password.update'), [
+                'password' => 'newpassword',
+                'password_confirmation' => 'newpassword',
+            ])
+            ->assertRedirect(route('admin.dashboard'))
+            ->assertSessionHas('success');
+
+        $this->assertTrue(Hash::check('newpassword', $admin->fresh()->password));
+
+        $this->post(route('admin.login'), [
+            'username' => 'admin',
+            'password' => 'newpassword',
+        ])->assertRedirect(route('admin.dashboard'));
     }
 }

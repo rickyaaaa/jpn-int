@@ -10,12 +10,18 @@ class AdminUserSeeder extends Seeder
 {
     public function run(): void
     {
-        User::updateOrCreate(
-            ['email' => 'admin@ricksite.com'],
-            [
-                'name' => 'Admin Ricksite',
-                'password' => Hash::make('password'),
-            ]
-        );
+        $admin = User::query()
+            ->where('username', 'admin')
+            ->orWhere('email', 'admin@ricksite.com')
+            ->first();
+
+        $attributes = [
+            'name' => 'Admin Ricksite',
+            'username' => 'admin',
+            'email' => 'admin@ricksite.com',
+            'password' => Hash::make('password'),
+        ];
+
+        $admin ? $admin->update($attributes) : User::create($attributes);
     }
 }

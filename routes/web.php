@@ -18,5 +18,6 @@ Route::post('/admin/login', [AdminController::class, 'login'])->name('admin.logi
 Route::middleware('auth')->prefix('admin')->group(function () {
     Route::get('/dashboard', [AdminController::class, 'dashboard'])->name('admin.dashboard');
     Route::post('/generate-token', [AdminController::class, 'generateToken'])->name('admin.generate-token');
+    Route::post('/password', [AdminController::class, 'updatePassword'])->name('admin.password.update');
     Route::post('/logout', [AdminController::class, 'logout'])->name('admin.logout');
 });
