@@ -48,6 +48,7 @@ class InterviewBackendTest extends TestCase
         $this->postJson(route('answers.store'), [
             'question_id' => $question->id,
             'duration_seconds' => 12,
+            'audio_mime_type' => 'video/mp4',
             'audio' => UploadedFile::fake()->create('answer.webm', 24, 'audio/webm'),
         ])
             ->assertOk()

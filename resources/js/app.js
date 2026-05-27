@@ -57,6 +57,8 @@ window.interviewPrototype = function interviewPrototype({ questions, resultsUrl,
         recorder: null,
         chunks: [],
         recordedBlob: null,
+        recordedFileName: '',
+        recordedMimeType: '',
         audioUrl: '',
         answers: [],
 
@@ -116,15 +118,33 @@ window.interviewPrototype = function interviewPrototype({ questions, resultsUrl,
 
             this.resetRecording();
             this.chunks = [];
-            this.recorder = new MediaRecorder(this.stream);
+            const preferredMimeType = this.preferredMimeType();
+            const options = preferredMimeType ? { mimeType: preferredMimeType } : {};
+
+            try {
+                this.recorder = new MediaRecorder(this.stream, options);
+            } catch (error) {
+                this.recorder = new MediaRecorder(this.stream);
+            }
+
             this.recorder.ondataavailable = (event) => {
                 if (event.data.size > 0) {
                     this.chunks.push(event.data);
                 }
             };
             this.recorder.onstop = () => {
-                const blob = new Blob(this.chunks, { type: this.recorder.mimeType || 'audio/webm' });
+                const mimeType = this.recorder.mimeType || preferredMimeType || this.chunks[0]?.type || 'audio/webm';
+                const blob = new Blob(this.chunks, { type: mimeType });
+
+                if (blob.size < 1024) {
+                    this.error = 'Rekaman terlalu kecil atau kosong. Coba rekam lagi dengan suara yang lebih jelas.';
+                    this.recorderState = 'idle';
+                    return;
+                }
+
                 this.recordedBlob = blob;
+                this.recordedMimeType = mimeType;
+                this.recordedFileName = `answer-${this.currentQuestion.number}.${this.extensionForMimeType(mimeType)}`;
                 this.audioUrl = URL.createObjectURL(blob);
                 this.recorderState = 'recorded';
             };
@@ -152,6 +172,8 @@ window.interviewPrototype = function interviewPrototype({ questions, resultsUrl,
             this.processing = false;
             this.error = '';
             this.recordedBlob = null;
+            this.recordedFileName = '';
+            this.recordedMimeType = '';
 
             if (this.audioUrl) {
                 URL.revokeObjectURL(this.audioUrl);
@@ -170,7 +192,8 @@ window.interviewPrototype = function interviewPrototype({ questions, resultsUrl,
             const formData = new FormData();
             formData.append('question_id', this.currentQuestion.id);
             formData.append('duration_seconds', this.elapsedSeconds);
-            formData.append('audio', this.recordedBlob, `answer-${this.currentQuestion.number}.webm`);
+            formData.append('audio_mime_type', this.recordedMimeType || this.recordedBlob.type || 'application/octet-stream');
+            formData.append('audio', this.recordedBlob, this.recordedFileName || `answer-${this.currentQuestion.number}.webm`);
 
             try {
                 const response = await fetch(this.uploadUrl, {
@@ -208,6 +231,42 @@ window.interviewPrototype = function interviewPrototype({ questions, resultsUrl,
             if (this.stream) {
                 this.stream.getTracks().forEach((track) => track.stop());
             }
+        },
+
+        preferredMimeType() {
+            const candidates = [
+                'audio/webm;codecs=opus',
+                'audio/webm',
+                'video/webm;codecs=opus',
+                'video/webm',
+                'audio/mp4',
+                'video/mp4',
+                'audio/ogg;codecs=opus',
+                'audio/ogg',
+            ];
+
+            return candidates.find((mimeType) => MediaRecorder.isTypeSupported?.(mimeType)) || '';
+        },
+
+        extensionForMimeType(mimeType) {
+            const cleanMimeType = (mimeType || '').split(';')[0].toLowerCase();
+            const extensions = {
+                'audio/webm': 'webm',
+                'video/webm': 'webm',
+                'audio/mp4': 'mp4',
+                'video/mp4': 'mp4',
+                'audio/mpeg': 'mp3',
+                'audio/ogg': 'ogg',
+                'video/ogg': 'ogg',
+                'audio/wav': 'wav',
+                'audio/x-wav': 'wav',
+                'audio/aac': 'aac',
+                'audio/x-aac': 'aac',
+                'audio/m4a': 'm4a',
+                'audio/x-m4a': 'm4a',
+            };
+
+            return extensions[cleanMimeType] || 'webm';
         },
 
         isLoggedIn() {

@@ -10,6 +10,7 @@ use App\Services\OpenAiInterviewEvaluator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
@@ -109,13 +110,25 @@ class InterviewController extends Controller
         $validated = $request->validate([
             'question_id' => ['required', 'integer', 'exists:questions,id'],
             'duration_seconds' => ['nullable', 'integer', 'min:0', 'max:3600'],
-            'audio' => [
-                'required',
-                'file',
-                'max:20480',
-                'mimetypes:audio/webm,video/webm,audio/wav,audio/x-wav,audio/mpeg,audio/mp4,audio/ogg,application/octet-stream',
-            ],
+            'audio_mime_type' => ['nullable', 'string', 'max:120'],
+            'audio' => ['required', 'file', 'max:20480'],
         ]);
+
+        $uploadedAudio = $request->file('audio');
+        $mimeType = $this->resolveAudioMimeType($request);
+
+        if (! $this->isSupportedAudioMimeType($mimeType)) {
+            return response()->json([
+                'message' => 'Format audio dari browser ini belum didukung. Coba buka langsung lewat Chrome/Safari terbaru, bukan dari in-app browser WhatsApp/Instagram.',
+                'detected_mime_type' => $mimeType,
+            ], 422);
+        }
+
+        if ($uploadedAudio->getSize() !== null && $uploadedAudio->getSize() < 1024) {
+            return response()->json([
+                'message' => 'File rekaman kosong atau terlalu kecil. Coba rekam ulang dengan suara yang lebih jelas.',
+            ], 422);
+        }
 
         $question = Question::findOrFail($validated['question_id']);
 
@@ -127,7 +140,12 @@ class InterviewController extends Controller
 
         $existingAnswer?->delete();
 
-        $audioPath = $request->file('audio')->store("answers/session-{$session->id}", 'local');
+        $extension = $this->extensionForMimeType($mimeType);
+        $audioPath = $uploadedAudio->storeAs(
+            "answers/session-{$session->id}",
+            'answer-'.$question->number.'-'.Str::uuid().'.'.$extension,
+            'local'
+        );
         $answer = Answer::create([
             'test_session_id' => $session->id,
             'question_id' => $question->id,
@@ -138,7 +156,6 @@ class InterviewController extends Controller
 
         try {
             $absolutePath = Storage::disk('local')->path($audioPath);
-            $mimeType = $request->file('audio')->getMimeType() ?: 'audio/webm';
             $transcript = $evaluator->transcribe($absolutePath, $mimeType);
             $evaluation = $evaluator->evaluate($question, $transcript, $answer->duration_seconds);
 
@@ -174,7 +191,7 @@ class InterviewController extends Controller
             report($error);
 
             return response()->json([
-                'message' => $error->getMessage(),
+                'message' => $this->publicErrorMessage($error->getMessage()),
             ], 422);
         }
     }
@@ -252,5 +269,68 @@ class InterviewController extends Controller
         $seconds ??= 0;
 
         return sprintf('%02d:%02d', floor($seconds / 60), $seconds % 60);
+    }
+
+    protected function resolveAudioMimeType(Request $request): string
+    {
+        $candidates = [
+            $request->input('audio_mime_type'),
+            $request->file('audio')?->getClientMimeType(),
+            $request->file('audio')?->getMimeType(),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && trim($candidate) !== '') {
+                return strtolower(strtok(trim($candidate), ';'));
+            }
+        }
+
+        return 'application/octet-stream';
+    }
+
+    protected function isSupportedAudioMimeType(string $mimeType): bool
+    {
+        return in_array($mimeType, [
+            'audio/webm',
+            'video/webm',
+            'audio/wav',
+            'audio/x-wav',
+            'audio/wave',
+            'audio/mpeg',
+            'audio/mp3',
+            'audio/mp4',
+            'video/mp4',
+            'audio/ogg',
+            'video/ogg',
+            'audio/aac',
+            'audio/x-aac',
+            'audio/m4a',
+            'audio/x-m4a',
+            'video/quicktime',
+            'application/octet-stream',
+        ], true);
+    }
+
+    protected function extensionForMimeType(string $mimeType): string
+    {
+        return match ($mimeType) {
+            'audio/mp4', 'video/mp4' => 'mp4',
+            'audio/mpeg', 'audio/mp3' => 'mp3',
+            'audio/ogg', 'video/ogg' => 'ogg',
+            'audio/wav', 'audio/x-wav', 'audio/wave' => 'wav',
+            'audio/aac', 'audio/x-aac' => 'aac',
+            'audio/m4a', 'audio/x-m4a' => 'm4a',
+            'video/quicktime' => 'mov',
+            default => 'webm',
+        };
+    }
+
+    protected function publicErrorMessage(string $message): string
+    {
+        if (str_contains($message, 'empty transcript')) {
+            return 'OpenAI tidak mendeteksi suara yang bisa ditranskrip. Pastikan mikrofon benar, rekam minimal 5 detik, dan bicara cukup jelas.';
+        }
+
+        return $message;
     }
 }
