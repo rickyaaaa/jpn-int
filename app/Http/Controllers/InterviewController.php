@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AccessCode;
 use App\Models\Answer;
 use App\Models\Candidate;
 use App\Models\Question;
@@ -10,6 +11,7 @@ use App\Services\InterviewAnswerProcessor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
 
@@ -22,29 +24,65 @@ class InterviewController extends Controller
 
     public function login(Request $request): RedirectResponse
     {
-        $credentials = $request->validate([
-            'username' => ['required', 'string'],
-            'password' => ['required', 'string'],
+        $validated = $request->validate([
+            'candidate_name' => ['required', 'string', 'max:120'],
+            'access_code' => ['required', 'string', 'size:6'],
         ]);
 
-        if ($credentials['username'] !== 'admin' || $credentials['password'] !== 'password') {
+        $candidateName = trim($validated['candidate_name']);
+        $accessCodeValue = Str::upper(trim($validated['access_code']));
+
+        $accessCode = AccessCode::query()
+            ->where('code', $accessCodeValue)
+            ->where('is_used', false)
+            ->first();
+
+        if (! $accessCode) {
             return back()
-                ->withInput($request->only('username'))
-                ->withErrors(['username' => 'Username atau password tidak sesuai.']);
+                ->withInput($request->only('candidate_name'))
+                ->withErrors(['access_code' => 'Kode akses tidak valid atau sudah pernah digunakan.']);
         }
 
-        $candidate = Candidate::create([
-            'username' => $credentials['username'],
-            'name' => 'Admin Tester',
-        ]);
+        [$candidate, $session] = DB::transaction(function () use ($accessCode, $accessCodeValue, $candidateName): array {
+            $accessCode = AccessCode::query()
+                ->whereKey($accessCode->id)
+                ->where('code', $accessCodeValue)
+                ->where('is_used', false)
+                ->lockForUpdate()
+                ->first();
 
-        $session = TestSession::create([
-            'candidate_id' => $candidate->id,
-            'start_time' => now(),
-            'status' => 'in_progress',
-        ]);
+            if (! $accessCode) {
+                return [null, null];
+            }
+
+            $accessCode->update([
+                'is_used' => true,
+                'used_by_name' => $candidateName,
+                'used_at' => now(),
+            ]);
+
+            $candidate = Candidate::create([
+                'username' => $accessCodeValue,
+                'name' => $candidateName,
+            ]);
+
+            $session = TestSession::create([
+                'candidate_id' => $candidate->id,
+                'start_time' => now(),
+                'status' => 'in_progress',
+            ]);
+
+            return [$candidate, $session];
+        });
+
+        if (! $candidate || ! $session) {
+            return back()
+                ->withInput($request->only('candidate_name'))
+                ->withErrors(['access_code' => 'Kode akses baru saja digunakan. Minta kode baru ke admin.']);
+        }
 
         $request->session()->put('candidate_id', $candidate->id);
+        $request->session()->put('candidate_name', $candidate->name);
         $request->session()->put('test_session_id', $session->id);
         $request->session()->regenerate();
 
@@ -53,10 +91,28 @@ class InterviewController extends Controller
 
     public function logout(Request $request): RedirectResponse
     {
-        $request->session()->forget(['candidate_id', 'test_session_id']);
+        $request->session()->forget(['candidate_id', 'candidate_name', 'test_session_id']);
         $request->session()->regenerateToken();
 
         return redirect()->route('start');
+    }
+
+    public function generateToken(): JsonResponse
+    {
+        do {
+            $code = Str::upper(Str::random(6));
+        } while (AccessCode::query()->where('code', $code)->exists());
+
+        $accessCode = AccessCode::create([
+            'code' => $code,
+            'is_used' => false,
+        ]);
+
+        return response()->json([
+            'code' => $accessCode->code,
+            'is_used' => $accessCode->is_used,
+            'created_at' => $accessCode->created_at?->toISOString(),
+        ]);
     }
 
     public function interview(Request $request): View|RedirectResponse
