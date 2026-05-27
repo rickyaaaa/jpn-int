@@ -40,11 +40,13 @@ window.startForm = function startForm() {
     };
 };
 
-window.interviewPrototype = function interviewPrototype({ questions, resultsUrl, uploadUrl, csrfToken, initialAnsweredCount = 0 }) {
+window.interviewPrototype = function interviewPrototype({ questions, initialAnswers = [], resultsUrl, uploadUrl, answersUrl, csrfToken, initialAnsweredCount = 0 }) {
     return {
         questions,
+        initialAnswers,
         resultsUrl,
         uploadUrl,
+        answersUrl,
         csrfToken,
         currentIndex: 0,
         permissionState: 'idle',
@@ -61,11 +63,13 @@ window.interviewPrototype = function interviewPrototype({ questions, resultsUrl,
         recordedMimeType: '',
         audioUrl: '',
         answers: [],
+        answersPollId: null,
 
         init() {
             localStorage.setItem(QUESTIONS_KEY, JSON.stringify(this.questions));
-            this.answers = this.questions.filter((question) => question.answered);
+            this.answers = this.initialAnswers;
             this.currentIndex = Math.min(initialAnsweredCount, this.questions.length - 1);
+            this.startAnswersPolling();
 
             if (initialAnsweredCount >= this.questions.length) {
                 window.location.replace(this.resultsUrl);
@@ -75,6 +79,10 @@ window.interviewPrototype = function interviewPrototype({ questions, resultsUrl,
                 this.permissionState = 'unsupported';
                 this.error = 'Browser ini belum mendukung perekaman suara langsung.';
             }
+        },
+
+        destroy() {
+            this.stopAnswersPolling();
         },
 
         get currentQuestion() {
@@ -89,6 +97,14 @@ window.interviewPrototype = function interviewPrototype({ questions, resultsUrl,
             const minutes = String(Math.floor(this.elapsedSeconds / 60)).padStart(2, '0');
             const seconds = String(this.elapsedSeconds % 60).padStart(2, '0');
             return `${minutes}:${seconds}`;
+        },
+
+        get sortedAnswers() {
+            return [...this.answers].sort((first, second) => first.questionNumber - second.questionNumber);
+        },
+
+        get hasProcessingAnswers() {
+            return this.answers.some((answer) => answer.status === 'processing');
         },
 
         async requestMic() {
@@ -211,7 +227,8 @@ window.interviewPrototype = function interviewPrototype({ questions, resultsUrl,
                     throw new Error(data.message || 'Gagal memproses jawaban.');
                 }
 
-                this.answers = [...this.answers, data.answer];
+                this.upsertAnswer(data.answer);
+                this.startAnswersPolling();
 
                 if (data.is_complete) {
                     this.stopTracks();
@@ -225,6 +242,85 @@ window.interviewPrototype = function interviewPrototype({ questions, resultsUrl,
                 this.error = error.message;
                 this.processing = false;
             }
+        },
+
+        async refreshAnswers() {
+            if (!this.answersUrl) {
+                return;
+            }
+
+            try {
+                const response = await fetch(this.answersUrl, {
+                    headers: {
+                        Accept: 'application/json',
+                    },
+                });
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.message || 'Gagal mengambil hasil jawaban.');
+                }
+
+                this.answers = data.answers || [];
+
+                if (!this.hasProcessingAnswers) {
+                    this.stopAnswersPolling();
+                }
+            } catch (error) {
+                this.stopAnswersPolling();
+            }
+        },
+
+        startAnswersPolling() {
+            if (this.answersPollId || !this.hasProcessingAnswers) {
+                return;
+            }
+
+            this.answersPollId = window.setInterval(() => {
+                this.refreshAnswers();
+            }, 2500);
+        },
+
+        stopAnswersPolling() {
+            if (!this.answersPollId) {
+                return;
+            }
+
+            window.clearInterval(this.answersPollId);
+            this.answersPollId = null;
+        },
+
+        upsertAnswer(answer) {
+            const existingIndex = this.answers.findIndex((item) => item.questionNumber === answer.questionNumber);
+
+            if (existingIndex === -1) {
+                this.answers = [...this.answers, answer];
+                return;
+            }
+
+            this.answers = this.answers.map((item, index) => (index === existingIndex ? answer : item));
+        },
+
+        statusLabel(status) {
+            const labels = {
+                completed: 'Selesai',
+                processing: 'Proses',
+                failed: 'Gagal',
+            };
+
+            return labels[status] || status || '-';
+        },
+
+        processingText(answer, fallback) {
+            if (answer.status === 'failed') {
+                return answer.errorMessage || 'Gagal diproses.';
+            }
+
+            return fallback;
+        },
+
+        isQuestionSubmitted(question) {
+            return this.answers.some((answer) => answer.questionNumber === question.number && answer.status !== 'failed');
         },
 
         stopTracks() {

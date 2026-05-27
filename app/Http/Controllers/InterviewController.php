@@ -6,15 +6,12 @@ use App\Models\Answer;
 use App\Models\Candidate;
 use App\Models\Question;
 use App\Models\TestSession;
-use App\Services\OpenAiInterviewEvaluator;
+use App\Services\InterviewAnswerProcessor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
-use Throwable;
 
 class InterviewController extends Controller
 {
@@ -70,11 +67,13 @@ class InterviewController extends Controller
             return redirect()->route('start');
         }
 
-        $answers = $session->answers()
-            ->where('status', 'completed')
+        $answers = $this->submittedAnswers($session)
             ->with('question')
             ->get()
-            ->keyBy('question_id');
+            ->sortBy(fn (Answer $answer) => $answer->question->number)
+            ->values();
+
+        $answeredQuestionIds = $answers->pluck('question_id')->all();
 
         $questions = Question::query()
             ->orderBy('number')
@@ -83,7 +82,7 @@ class InterviewController extends Controller
                 'id' => $question->id,
                 'number' => $question->number,
                 'text' => $question->japanese_text,
-                'answered' => $answers->has($question->id),
+                'answered' => in_array($question->id, $answeredQuestionIds, true),
             ])
             ->values();
 
@@ -94,12 +93,38 @@ class InterviewController extends Controller
         return view('pages.interview', [
             'questions' => $questions,
             'answeredCount' => $answers->count(),
+            'answers' => $answers
+                ->map(fn (Answer $answer) => $this->answerPayload($answer))
+                ->values(),
+        ]);
+    }
+
+    public function answers(Request $request): JsonResponse
+    {
+        $session = $this->currentSession($request);
+
+        if (! $session) {
+            return response()->json(['message' => 'Sesi login tidak ditemukan. Silakan login ulang.'], 401);
+        }
+
+        $answers = $session->answers()
+            ->with('question')
+            ->orderBy('question_id')
+            ->get()
+            ->sortBy(fn (Answer $answer) => $answer->question->number)
+            ->map(fn (Answer $answer) => $this->answerPayload($answer))
+            ->values();
+
+        return response()->json([
+            'answers' => $answers,
+            'answered_count' => $this->submittedAnswerCount($session),
+            'is_complete' => $session->fresh()->status === 'completed',
         ]);
     }
 
     public function storeAnswer(
         Request $request,
-        OpenAiInterviewEvaluator $evaluator
+        InterviewAnswerProcessor $processor
     ): JsonResponse {
         $session = $this->currentSession($request);
 
@@ -134,8 +159,15 @@ class InterviewController extends Controller
 
         $existingAnswer = $session->answers()->where('question_id', $question->id)->first();
 
-        if ($existingAnswer && $existingAnswer->status === 'completed') {
-            return response()->json(['message' => 'Pertanyaan ini sudah dijawab.'], 422);
+        if ($existingAnswer && in_array($existingAnswer->status, ['processing', 'completed'], true)) {
+            $submittedCount = $this->submittedAnswerCount($session);
+
+            return response()->json([
+                'answer' => $this->answerPayload($existingAnswer->fresh('question')),
+                'answered_count' => $submittedCount,
+                'is_complete' => $submittedCount >= Question::query()->count(),
+                'results_url' => route('results'),
+            ]);
         }
 
         $existingAnswer?->delete();
@@ -154,46 +186,20 @@ class InterviewController extends Controller
             'status' => 'processing',
         ]);
 
-        try {
-            $absolutePath = Storage::disk('local')->path($audioPath);
-            $transcript = $evaluator->transcribe($absolutePath, $mimeType);
-            $evaluation = $evaluator->evaluate($question, $transcript, $answer->duration_seconds);
-
-            DB::transaction(function () use ($answer, $evaluation, $session, $transcript): void {
-                $answer->update([
-                    'transcribed_text' => $transcript,
-                    'score' => $evaluation['overall_score'],
-                    'pronunciation_score' => $evaluation['pronunciation_score'],
-                    'fluency_score' => $evaluation['fluency_score'],
-                    'grammar_score' => $evaluation['grammar_score'],
-                    'feedback' => $evaluation['feedback'],
-                    'status' => 'completed',
-                    'error_message' => null,
-                ]);
-
-                $this->refreshSessionScore($session->fresh());
-            });
-
-            $session = $session->fresh('answers');
-
-            return response()->json([
-                'answer' => $this->answerPayload($answer->fresh('question')),
-                'answered_count' => $session->answers()->where('status', 'completed')->count(),
-                'is_complete' => $session->status === 'completed',
-                'results_url' => route('results'),
-            ]);
-        } catch (Throwable $error) {
-            $answer->update([
-                'status' => 'failed',
-                'error_message' => $error->getMessage(),
-            ]);
-
-            report($error);
-
-            return response()->json([
-                'message' => $this->publicErrorMessage($error->getMessage()),
-            ], 422);
+        if (app()->runningUnitTests()) {
+            $processor->process($answer->id, $mimeType);
+        } else {
+            app()->terminating(fn () => $processor->process($answer->id, $mimeType));
         }
+
+        $submittedCount = $this->submittedAnswerCount($session);
+
+        return response()->json([
+            'answer' => $this->answerPayload($answer->fresh('question')),
+            'answered_count' => $submittedCount,
+            'is_complete' => $submittedCount >= Question::query()->count(),
+            'results_url' => route('results'),
+        ]);
     }
 
     public function results(Request $request): View|RedirectResponse
@@ -228,22 +234,15 @@ class InterviewController extends Controller
             ->find($sessionId);
     }
 
-    protected function refreshSessionScore(TestSession $session): void
+    protected function submittedAnswers(TestSession $session)
     {
-        $completedAnswers = $session->answers()
-            ->where('status', 'completed')
-            ->get();
+        return $session->answers()
+            ->whereIn('status', ['processing', 'completed']);
+    }
 
-        $updates = [
-            'total_score' => $completedAnswers->avg('score'),
-        ];
-
-        if ($completedAnswers->count() >= 10) {
-            $updates['status'] = 'completed';
-            $updates['end_time'] = now();
-        }
-
-        $session->update($updates);
+    protected function submittedAnswerCount(TestSession $session): int
+    {
+        return $this->submittedAnswers($session)->count();
     }
 
     protected function answerPayload(Answer $answer): array
@@ -253,6 +252,7 @@ class InterviewController extends Controller
             'question' => $answer->question->japanese_text,
             'duration' => $this->formatDuration($answer->duration_seconds),
             'score' => $answer->score,
+            'level' => $this->levelForScore($answer),
             'pronunciationScore' => $answer->pronunciation_score,
             'fluencyScore' => $answer->fluency_score,
             'grammarScore' => $answer->grammar_score,
@@ -269,6 +269,26 @@ class InterviewController extends Controller
         $seconds ??= 0;
 
         return sprintf('%02d:%02d', floor($seconds / 60), $seconds % 60);
+    }
+
+    protected function levelForScore(Answer $answer): string
+    {
+        if ($answer->status === 'processing') {
+            return 'Sedang diproses';
+        }
+
+        if ($answer->status === 'failed') {
+            return 'Perlu rekam ulang';
+        }
+
+        $score = (int) round($answer->score ?? 0);
+
+        return match (true) {
+            $score >= 90 => 'Sangat baik',
+            $score >= 80 => 'Baik',
+            $score >= 70 => 'Cukup',
+            default => 'Perlu latihan',
+        };
     }
 
     protected function resolveAudioMimeType(Request $request): string
@@ -323,14 +343,5 @@ class InterviewController extends Controller
             'video/quicktime' => 'mov',
             default => 'webm',
         };
-    }
-
-    protected function publicErrorMessage(string $message): string
-    {
-        if (str_contains($message, 'empty transcript')) {
-            return 'OpenAI tidak mendeteksi suara yang bisa ditranskrip. Pastikan mikrofon benar, rekam minimal 5 detik, dan bicara cukup jelas.';
-        }
-
-        return $message;
     }
 }

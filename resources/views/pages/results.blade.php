@@ -1,6 +1,10 @@
 <x-layouts.app title="Hasil Tes - Japanese Interview AI">
     @php
         $averageScore = $session->total_score ? round($session->total_score) : 0;
+        $completedCount = $answers->where('status', 'completed')->count();
+        $processingCount = $answers->where('status', 'processing')->count();
+        $submittedCount = $answers->count();
+        $hasProcessing = $processingCount > 0;
         $summaryText = match (true) {
             $averageScore >= 88 => 'Kandidat menunjukkan kesiapan komunikasi Jepang yang kuat untuk sesi awal.',
             $averageScore >= 78 => 'Kandidat cukup siap, dengan beberapa area latihan pada pelafalan dan tata bahasa dasar.',
@@ -14,6 +18,9 @@
                 <p class="text-sm font-bold uppercase tracking-wide text-teal-700">Dashboard hasil akhir</p>
                 <h1 class="mt-2 text-3xl font-extrabold text-zinc-950">Ringkasan performa kandidat</h1>
                 <p class="mt-2 text-sm leading-6 text-zinc-600">Skor dan umpan balik diambil dari hasil transkripsi dan evaluasi OpenAI yang tersimpan di database.</p>
+                @if ($hasProcessing)
+                    <p class="mt-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">Beberapa jawaban masih diproses. Halaman ini akan diperbarui otomatis.</p>
+                @endif
             </div>
             <div class="flex gap-3">
                 <a href="{{ route('interview') }}" class="btn-secondary">Kembali ke tes</a>
@@ -49,8 +56,14 @@
                         </div>
                         <div>
                             <dt class="text-zinc-500">Progress</dt>
-                            <dd class="mt-1 font-bold text-zinc-950">{{ $answers->where('status', 'completed')->count() }}/10 soal</dd>
+                            <dd class="mt-1 font-bold text-zinc-950">{{ $completedCount }}/{{ $submittedCount ?: 10 }} selesai</dd>
                         </div>
+                        @if ($processingCount > 0)
+                            <div>
+                                <dt class="text-zinc-500">Dalam proses</dt>
+                                <dd class="mt-1 font-bold text-zinc-950">{{ $processingCount }} jawaban</dd>
+                            </div>
+                        @endif
                     </dl>
                 </div>
             </aside>
@@ -76,18 +89,21 @@
                                         <p class="font-jp mt-2 text-lg font-bold leading-relaxed text-zinc-950">{{ $answer['question'] }}</p>
                                     </div>
                                     <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-xl font-extrabold text-teal-800">
-                                        {{ $answer['score'] ?? '-' }}
+                                        <div class="text-center">
+                                            <p>{{ $answer['score'] ?? '-' }}</p>
+                                            <p class="text-[10px] font-bold uppercase tracking-wide text-teal-700">{{ $answer['level'] ?? '-' }}</p>
+                                        </div>
                                     </div>
                                 </div>
 
                                 <div class="mt-4 grid gap-4 md:grid-cols-3">
                                     <div class="rounded-lg bg-zinc-50 p-4">
                                         <p class="text-xs font-bold uppercase tracking-wide text-zinc-500">Transkrip</p>
-                                        <p class="font-jp mt-2 text-sm leading-6 text-zinc-800">{{ $answer['transcript'] ?? '-' }}</p>
+                                        <p class="font-jp mt-2 text-sm leading-6 text-zinc-800">{{ $answer['transcript'] ?? ($answer['status'] === 'processing' ? 'Sedang diproses...' : '-') }}</p>
                                     </div>
                                     <div class="rounded-lg bg-amber-50 p-4">
                                         <p class="text-xs font-bold uppercase tracking-wide text-amber-700">Catatan perbaikan</p>
-                                        <p class="mt-2 text-sm leading-6 text-zinc-800">{{ $answer['feedback'] ?? $answer['errorMessage'] ?? '-' }}</p>
+                                        <p class="mt-2 text-sm leading-6 text-zinc-800">{{ $answer['feedback'] ?? $answer['errorMessage'] ?? ($answer['status'] === 'processing' ? 'Evaluasi OpenAI masih berjalan.' : '-') }}</p>
                                     </div>
                                     <div class="rounded-lg bg-teal-50 p-4">
                                         <p class="text-xs font-bold uppercase tracking-wide text-teal-700">Rincian skor</p>
@@ -114,4 +130,10 @@
             </div>
         </div>
     </section>
+
+    @if ($hasProcessing)
+        <script>
+            window.setTimeout(() => window.location.reload(), 3000);
+        </script>
+    @endif
 </x-layouts.app>

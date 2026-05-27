@@ -53,8 +53,16 @@ class InterviewBackendTest extends TestCase
         ])
             ->assertOk()
             ->assertJsonPath('answer.score', 86)
+            ->assertJsonPath('answer.level', 'Baik')
             ->assertJsonPath('answered_count', 1)
             ->assertJsonPath('is_complete', false);
+
+        $this->getJson(route('answers.index'))
+            ->assertOk()
+            ->assertJsonPath('answers.0.questionNumber', 1)
+            ->assertJsonPath('answers.0.score', 86)
+            ->assertJsonPath('answers.0.level', 'Baik')
+            ->assertJsonPath('answered_count', 1);
 
         $this->assertDatabaseHas('answers', [
             'question_id' => $question->id,
