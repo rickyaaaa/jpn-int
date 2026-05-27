@@ -97,24 +97,6 @@ class InterviewController extends Controller
         return redirect()->route('start');
     }
 
-    public function generateToken(): JsonResponse
-    {
-        do {
-            $code = Str::upper(Str::random(6));
-        } while (AccessCode::query()->where('code', $code)->exists());
-
-        $accessCode = AccessCode::create([
-            'code' => $code,
-            'is_used' => false,
-        ]);
-
-        return response()->json([
-            'code' => $accessCode->code,
-            'is_used' => $accessCode->is_used,
-            'created_at' => $accessCode->created_at?->toISOString(),
-        ]);
-    }
-
     public function interview(Request $request): View|RedirectResponse
     {
         $session = $this->currentSession($request);

@@ -31,7 +31,7 @@
                 </div>
             </div>
 
-            <form method="POST" action="{{ route('login') }}" class="rounded-lg border border-white/10 bg-white/[0.08] p-6 shadow-2xl shadow-black/30 backdrop-blur sm:p-8">
+            <form method="POST" action="{{ route('candidate.login') }}" class="rounded-lg border border-white/10 bg-white/[0.08] p-6 shadow-2xl shadow-black/30 backdrop-blur sm:p-8">
                 @csrf
 
                 <div class="flex items-start justify-between gap-4">

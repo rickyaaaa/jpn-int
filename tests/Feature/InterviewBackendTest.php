@@ -4,10 +4,12 @@ namespace Tests\Feature;
 
 use App\Models\AccessCode;
 use App\Models\Question;
+use App\Models\User;
 use App\Services\OpenAiInterviewEvaluator;
 use Database\Seeders\QuestionSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -40,7 +42,7 @@ class InterviewBackendTest extends TestCase
             }
         });
 
-        $this->post(route('login'), [
+        $this->post(route('candidate.login'), [
             'candidate_name' => 'Aulia Tester',
             'access_code' => 'ABC123',
         ])->assertRedirect(route('interview'));
@@ -89,14 +91,14 @@ class InterviewBackendTest extends TestCase
             'used_at' => now(),
         ]);
 
-        $this->post(route('login'), [
+        $this->post(route('candidate.login'), [
             'candidate_name' => 'Aulia Tester',
             'access_code' => 'BAD123',
         ])
             ->assertSessionHasErrors('access_code')
             ->assertRedirect();
 
-        $this->post(route('login'), [
+        $this->post(route('candidate.login'), [
             'candidate_name' => 'Aulia Tester',
             'access_code' => 'USED01',
         ])
@@ -106,17 +108,40 @@ class InterviewBackendTest extends TestCase
 
     public function test_admin_generate_token_creates_unused_access_code(): void
     {
-        $response = $this->getJson(route('admin.generate-token'))
-            ->assertOk()
-            ->assertJsonPath('is_used', false)
-            ->assertJsonStructure(['code', 'is_used', 'created_at']);
-
-        $code = $response->json('code');
-
-        $this->assertMatchesRegularExpression('/^[A-Z0-9]{6}$/', $code);
-        $this->assertDatabaseHas('access_codes', [
-            'code' => $code,
-            'is_used' => false,
+        $admin = User::create([
+            'name' => 'Admin Ricksite',
+            'email' => 'admin@ricksite.com',
+            'password' => Hash::make('password'),
         ]);
+
+        $this->actingAs($admin)
+            ->post(route('admin.generate-token'))
+            ->assertRedirect(route('admin.dashboard'))
+            ->assertSessionHas('success');
+
+        $accessCode = AccessCode::query()->firstOrFail();
+
+        $this->assertMatchesRegularExpression('/^[A-Z0-9]{6}$/', $accessCode->code);
+        $this->assertFalse($accessCode->is_used);
+    }
+
+    public function test_admin_can_login_and_view_dashboard(): void
+    {
+        User::create([
+            'name' => 'Admin Ricksite',
+            'email' => 'admin@ricksite.com',
+            'password' => Hash::make('password'),
+        ]);
+        AccessCode::create(['code' => 'VIEW01']);
+
+        $this->post(route('admin.login'), [
+            'email' => 'admin@ricksite.com',
+            'password' => 'password',
+        ])->assertRedirect(route('admin.dashboard'));
+
+        $this->get(route('admin.dashboard'))
+            ->assertOk()
+            ->assertSee('VIEW01')
+            ->assertSee('Generate New Access Code');
     }
 }

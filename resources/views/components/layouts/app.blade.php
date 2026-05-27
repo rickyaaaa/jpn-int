@@ -24,13 +24,23 @@
                     </a>
 
                     <nav class="hidden items-center gap-2 text-sm font-semibold text-zinc-600 sm:flex">
-                        <a href="{{ route('interview') }}" class="rounded-md px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950">Tes</a>
-                        <a href="{{ route('results') }}" class="rounded-md px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950">Hasil</a>
-                        @if (session('test_session_id'))
+                        @auth
+                            <a href="{{ route('admin.dashboard') }}" class="rounded-md px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950">Admin</a>
+                            <a href="{{ route('start') }}" class="rounded-md px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950">Kandidat</a>
+                            <form method="POST" action="{{ route('admin.logout') }}">
+                                @csrf
+                                <button class="rounded-md px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950" type="submit">Logout Admin</button>
+                            </form>
+                        @elseif (session('test_session_id'))
+                            <a href="{{ route('interview') }}" class="rounded-md px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950">Tes</a>
+                            <a href="{{ route('results') }}" class="rounded-md px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950">Hasil</a>
                             <form method="POST" action="{{ route('logout') }}">
                                 @csrf
                                 <button class="rounded-md px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950" type="submit">Logout</button>
                             </form>
+                        @else
+                            <a href="{{ route('start') }}" class="rounded-md px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950">Kandidat</a>
+                            <a href="{{ route('login') }}" class="rounded-md px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950">Admin</a>
                         @endif
                     </nav>
                 </div>
