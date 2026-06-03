@@ -112,4 +112,9 @@ return [
 
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
 
+    'token_generator_emails' => array_filter(array_map(
+        'trim',
+        explode(',', env('ADMIN_TOKEN_GENERATOR_EMAILS', 'admin@ricksite.com'))
+    )),
+
 ];

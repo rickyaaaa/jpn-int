@@ -126,6 +126,41 @@ class InterviewBackendTest extends TestCase
         $this->assertFalse($accessCode->is_used);
     }
 
+    public function test_answers_store_returns_json_validation_error(): void
+    {
+        $this->seed(QuestionSeeder::class);
+        AccessCode::create(['code' => 'JSON01']);
+
+        $this->post(route('candidate.login'), [
+            'candidate_name' => 'Json Tester',
+            'access_code' => 'JSON01',
+        ])->assertRedirect(route('interview'));
+
+        $this->postJson(route('answers.store'), [
+            'question_id' => Question::query()->where('number', 1)->firstOrFail()->id,
+        ])
+            ->assertStatus(422)
+            ->assertHeader('content-type', 'application/json')
+            ->assertJsonStructure(['message', 'errors']);
+    }
+
+    public function test_only_allowed_admin_email_can_generate_token(): void
+    {
+        $admin = User::create([
+            'name' => 'Limited Admin',
+            'username' => 'limited',
+            'email' => 'limited@example.com',
+            'password' => Hash::make('password'),
+        ]);
+
+        $this->actingAs($admin)
+            ->post(route('admin.generate-token'))
+            ->assertRedirect(route('admin.dashboard'))
+            ->assertSessionHasErrors('generate_token');
+
+        $this->assertDatabaseCount('access_codes', 0);
+    }
+
     public function test_admin_can_login_and_view_dashboard(): void
     {
         User::create([
@@ -144,7 +179,7 @@ class InterviewBackendTest extends TestCase
         $this->get(route('admin.dashboard'))
             ->assertOk()
             ->assertSee('VIEW01')
-            ->assertSee('Generate New Access Code');
+            ->assertSee('Generate New Code');
     }
 
     public function test_admin_can_update_password(): void

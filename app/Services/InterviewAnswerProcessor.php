@@ -63,9 +63,11 @@ class InterviewAnswerProcessor
             'total_score' => $completedAnswers->avg('score'),
         ];
 
-        if ($completedAnswers->count() >= 10) {
+        $questionCount = \App\Models\Question::query()->count();
+
+        if ($completedAnswers->count() >= $questionCount) {
             $updates['status'] = 'completed';
-            $updates['end_time'] = now();
+            $updates['end_time'] = $session->end_time ?? now();
         }
 
         $session->update($updates);

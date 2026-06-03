@@ -48,7 +48,7 @@
             </div>
 
             <div class="flex flex-col gap-4">
-                <form method="POST" action="{{ route('candidate.login') }}" class="rounded-lg border border-white/10 bg-white/[0.08] p-6 shadow-2xl shadow-black/30 backdrop-blur sm:p-8">
+                <form method="POST" action="{{ route('candidate.login') }}" class="rounded-lg border border-white/10 bg-white/[0.08] p-6 shadow-2xl shadow-black/30 backdrop-blur sm:p-8" id="candidate-start-form">
                     @csrf
 
                     <div class="flex items-start justify-between gap-4">
@@ -118,7 +118,21 @@
             </div>
         </div>
     </section>
+<script>
+    const startForm = document.getElementById('candidate-start-form');
+    const startBtn = document.getElementById('start-btn');
+
+    startForm?.addEventListener('submit', () => {
+        startBtn.disabled = true;
+        startBtn.classList.add('cursor-not-allowed', 'opacity-70');
+        startBtn.innerHTML = `
+            <svg class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4Z"></path>
+            </svg>
+            Memulai...
+        `;
+    });
+</script>
 </body>
 </html>
-
-

@@ -19,14 +19,25 @@ class AdminController extends Controller
 
     public function login(Request $request): RedirectResponse
     {
-        $credentials = $request->validate([
-            'email'    => ['required', 'email'],
+        $validated = $request->validate([
+            'email'    => ['nullable', 'email', 'required_without:username'],
+            'username' => ['nullable', 'string', 'required_without:email'],
             'password' => ['required', 'string'],
         ]);
 
+        $credentials = [
+            'password' => $validated['password'],
+        ];
+
+        if (! empty($validated['email'])) {
+            $credentials['email'] = $validated['email'];
+        } else {
+            $credentials['username'] = $validated['username'];
+        }
+
         if (! Auth::attempt($credentials, remember: false)) {
             return back()
-                ->withInput($request->only('email'))
+                ->withInput($request->only('email', 'username'))
                 ->withErrors(['email' => 'Email atau password admin tidak sesuai.']);
         }
 
@@ -44,13 +55,27 @@ class AdminController extends Controller
             'sessions' => \App\Models\TestSession::query()
                 ->with('candidate')
                 ->withCount('answers')
+                ->withCount([
+                    'answers as completed_answers_count' => fn ($query) => $query->where('status', 'completed'),
+                    'answers as processing_answers_count' => fn ($query) => $query->where('status', 'processing'),
+                    'answers as failed_answers_count' => fn ($query) => $query->where('status', 'failed'),
+                ])
                 ->latest()
                 ->get(),
         ]);
     }
 
-    public function generateToken(): RedirectResponse
+    public function generateToken(Request $request): RedirectResponse
     {
+        $allowedEmails = config('auth.token_generator_emails', []);
+        $adminEmail = $request->user()?->email;
+
+        if (! $adminEmail || ! in_array($adminEmail, $allowedEmails, true)) {
+            return redirect()
+                ->route('admin.dashboard')
+                ->withErrors(['generate_token' => 'Akun admin ini tidak diizinkan membuat kode akses.']);
+        }
+
         do {
             $code = Str::upper(Str::random(6));
         } while (AccessCode::query()->where('code', $code)->exists());

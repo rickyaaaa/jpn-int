@@ -13,7 +13,9 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use Throwable;
 
 class InterviewController extends Controller
 {
@@ -139,105 +141,125 @@ class InterviewController extends Controller
 
     public function answers(Request $request): JsonResponse
     {
-        $session = $this->currentSession($request);
+        try {
+            $session = $this->currentSession($request);
 
-        if (! $session) {
-            return response()->json(['message' => 'Sesi login tidak ditemukan. Silakan login ulang.'], 401);
+            if (! $session) {
+                return response()->json(['message' => 'Sesi login tidak ditemukan. Silakan login ulang.'], 401);
+            }
+
+            $answers = $session->answers()
+                ->with('question')
+                ->orderBy('question_id')
+                ->get()
+                ->sortBy(fn (Answer $answer) => $answer->question->number)
+                ->map(fn (Answer $answer) => $this->answerPayload($answer))
+                ->values();
+
+            return response()->json([
+                'answers' => $answers,
+                'answered_count' => $this->submittedAnswerCount($session),
+                'is_complete' => $session->fresh()->status === 'completed',
+            ]);
+        } catch (Throwable $error) {
+            report($error);
+
+            return $this->jsonError($error);
         }
-
-        $answers = $session->answers()
-            ->with('question')
-            ->orderBy('question_id')
-            ->get()
-            ->sortBy(fn (Answer $answer) => $answer->question->number)
-            ->map(fn (Answer $answer) => $this->answerPayload($answer))
-            ->values();
-
-        return response()->json([
-            'answers' => $answers,
-            'answered_count' => $this->submittedAnswerCount($session),
-            'is_complete' => $session->fresh()->status === 'completed',
-        ]);
     }
 
     public function storeAnswer(
         Request $request,
         InterviewAnswerProcessor $processor
     ): JsonResponse {
-        $session = $this->currentSession($request);
+        try {
+            $session = $this->currentSession($request);
 
-        if (! $session) {
-            return response()->json(['message' => 'Sesi login tidak ditemukan. Silakan login ulang.'], 401);
-        }
+            if (! $session) {
+                return response()->json(['message' => 'Sesi login tidak ditemukan. Silakan login ulang.'], 401);
+            }
 
-        $validated = $request->validate([
-            'question_id' => ['required', 'integer', 'exists:questions,id'],
-            'duration_seconds' => ['nullable', 'integer', 'min:0', 'max:3600'],
-            'audio_mime_type' => ['nullable', 'string', 'max:120'],
-            'audio' => ['required', 'file', 'max:20480'],
-        ]);
+            $validated = $request->validate([
+                'question_id' => ['required', 'integer', 'exists:questions,id'],
+                'duration_seconds' => ['nullable', 'integer', 'min:0', 'max:3600'],
+                'audio_mime_type' => ['nullable', 'string', 'max:120'],
+                'audio' => ['required', 'file', 'max:20480'],
+            ]);
 
-        $uploadedAudio = $request->file('audio');
-        $mimeType = $this->resolveAudioMimeType($request);
+            $uploadedAudio = $request->file('audio');
+            $mimeType = $this->resolveAudioMimeType($request);
 
-        if (! $this->isSupportedAudioMimeType($mimeType)) {
-            return response()->json([
-                'message' => 'Format audio dari browser ini belum didukung. Coba buka langsung lewat Chrome/Safari terbaru, bukan dari in-app browser WhatsApp/Instagram.',
-                'detected_mime_type' => $mimeType,
-            ], 422);
-        }
+            if (! $this->isSupportedAudioMimeType($mimeType)) {
+                return response()->json([
+                    'message' => 'Format audio dari browser ini belum didukung. Coba buka langsung lewat Chrome/Safari terbaru, bukan dari in-app browser WhatsApp/Instagram.',
+                    'detected_mime_type' => $mimeType,
+                ], 422);
+            }
 
-        if ($uploadedAudio->getSize() !== null && $uploadedAudio->getSize() < 1024) {
-            return response()->json([
-                'message' => 'File rekaman kosong atau terlalu kecil. Coba rekam ulang dengan suara yang lebih jelas.',
-            ], 422);
-        }
+            if ($uploadedAudio->getSize() !== null && $uploadedAudio->getSize() < 1024) {
+                return response()->json([
+                    'message' => 'File rekaman kosong atau terlalu kecil. Coba rekam ulang dengan suara yang lebih jelas.',
+                ], 422);
+            }
 
-        $question = Question::findOrFail($validated['question_id']);
+            $question = Question::findOrFail($validated['question_id']);
 
-        $existingAnswer = $session->answers()->where('question_id', $question->id)->first();
+            $existingAnswer = $session->answers()->where('question_id', $question->id)->first();
 
-        if ($existingAnswer && in_array($existingAnswer->status, ['processing', 'completed'], true)) {
+            if ($existingAnswer && in_array($existingAnswer->status, ['processing', 'completed'], true)) {
+                $submittedCount = $this->submittedAnswerCount($session);
+
+                return response()->json([
+                    'answer' => $this->answerPayload($existingAnswer->fresh('question')),
+                    'answered_count' => $submittedCount,
+                    'is_complete' => $submittedCount >= Question::query()->count(),
+                    'results_url' => route('results'),
+                ]);
+            }
+
+            $existingAnswer?->delete();
+
+            $extension = $this->extensionForMimeType($mimeType);
+            $audioPath = $uploadedAudio->storeAs(
+                "answers/session-{$session->id}",
+                'answer-'.$question->number.'-'.Str::uuid().'.'.$extension,
+                'local'
+            );
+            $answer = Answer::create([
+                'test_session_id' => $session->id,
+                'question_id' => $question->id,
+                'audio_path' => $audioPath,
+                'duration_seconds' => $validated['duration_seconds'] ?? null,
+                'status' => 'processing',
+            ]);
+
+            if (app()->runningUnitTests()) {
+                $processor->process($answer->id, $mimeType);
+            } else {
+                app()->terminating(fn () => $processor->process($answer->id, $mimeType));
+            }
+
             $submittedCount = $this->submittedAnswerCount($session);
+            $questionCount = Question::query()->count();
+
+            if ($submittedCount >= $questionCount && $session->status !== 'completed') {
+                $session->update([
+                    'status' => 'submitted',
+                    'end_time' => $session->end_time ?? now(),
+                ]);
+            }
 
             return response()->json([
-                'answer' => $this->answerPayload($existingAnswer->fresh('question')),
+                'answer' => $this->answerPayload($answer->fresh('question')),
                 'answered_count' => $submittedCount,
-                'is_complete' => $submittedCount >= Question::query()->count(),
+                'is_complete' => $submittedCount >= $questionCount,
                 'results_url' => route('results'),
             ]);
+        } catch (Throwable $error) {
+            report($error);
+
+            return $this->jsonError($error);
         }
-
-        $existingAnswer?->delete();
-
-        $extension = $this->extensionForMimeType($mimeType);
-        $audioPath = $uploadedAudio->storeAs(
-            "answers/session-{$session->id}",
-            'answer-'.$question->number.'-'.Str::uuid().'.'.$extension,
-            'local'
-        );
-        $answer = Answer::create([
-            'test_session_id' => $session->id,
-            'question_id' => $question->id,
-            'audio_path' => $audioPath,
-            'duration_seconds' => $validated['duration_seconds'] ?? null,
-            'status' => 'processing',
-        ]);
-
-        if (app()->runningUnitTests()) {
-            $processor->process($answer->id, $mimeType);
-        } else {
-            app()->terminating(fn () => $processor->process($answer->id, $mimeType));
-        }
-
-        $submittedCount = $this->submittedAnswerCount($session);
-
-        return response()->json([
-            'answer' => $this->answerPayload($answer->fresh('question')),
-            'answered_count' => $submittedCount,
-            'is_complete' => $submittedCount >= Question::query()->count(),
-            'results_url' => route('results'),
-        ]);
     }
 
     public function results(Request $request): View|RedirectResponse
@@ -381,5 +403,21 @@ class InterviewController extends Controller
             'video/quicktime' => 'mov',
             default => 'webm',
         };
+    }
+
+    protected function jsonError(Throwable $error): JsonResponse
+    {
+        if ($error instanceof ValidationException) {
+            return response()->json([
+                'message' => $error->validator->errors()->first() ?: 'Input tidak valid.',
+                'errors' => $error->errors(),
+            ], 422);
+        }
+
+        return response()->json([
+            'message' => app()->hasDebugModeEnabled()
+                ? $error->getMessage()
+                : 'Terjadi kesalahan saat memproses request. Silakan coba lagi.',
+        ], 500);
     }
 }

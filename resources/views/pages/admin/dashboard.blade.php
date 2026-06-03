@@ -418,6 +418,7 @@
                                 };
                                 $statusLabel = match($session->status) {
                                     'completed'   => ['label' => 'Selesai',     'class' => 'pill-green'],
+                                    'submitted'   => ['label' => 'Terkirim',    'class' => 'pill-yellow'],
                                     'in_progress' => ['label' => 'Berlangsung', 'class' => 'pill-yellow'],
                                     default       => ['label' => $session->status, 'class' => 'pill-red'],
                                 };
@@ -459,6 +460,13 @@
                                         </div>
                                         <span class="text-xs text-zinc-400">{{ $session->answers_count }}/10</span>
                                     </div>
+                                    @if (($session->processing_answers_count ?? 0) > 0 || ($session->failed_answers_count ?? 0) > 0)
+                                        <p class="mt-1 text-[11px] text-zinc-500">
+                                            {{ $session->completed_answers_count ?? 0 }} selesai,
+                                            {{ $session->processing_answers_count ?? 0 }} proses,
+                                            {{ $session->failed_answers_count ?? 0 }} gagal
+                                        </p>
+                                    @endif
                                 </td>
 
                                 {{-- Mulai --}}
